@@ -196,12 +196,10 @@ def calorie_preprocess(all_participants_data):
 def location_preprocess(all_participants_data):
     for participant_id, participant_data in all_participants_data.items():
         if 'Location.csv' in participant_data:
-            # Assuming 'timestamp' is the column containing the timestamp information
-            participant_data['Location.csv']['timestamp'] = pd.to_datetime(participant_data['Location.csv']['timestamp'])
-            participant_data['Location.csv'].set_index('timestamp', inplace=True)
-            participant_data['Location.csv'] = participant_data['Location.csv'].resample('5T').ffill() 
+            data = participant_data['Location.csv'].sort_index(axis=0, level='timestamp')
+            data = data.resample('5T').ffill() 
             data.interpolate(method='time', limit=10, limit_direction='both', inplace=True)
-            data['cluster'] = data.apply(lambda row: geo.encode(row['latitude'], row['longitude'], precision=7), axis=1)
+            data['cluster'] = data.apply(lambda row: geo.encode(row['longitude'], row['latitude'], precision=7), axis=1)
             participant_data['Location.csv'] = data
 
 
