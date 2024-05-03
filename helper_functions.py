@@ -3,6 +3,7 @@
 
 # In[3]:
 
+!pip install pygeohash
 
 import os
 import pandas as pd
