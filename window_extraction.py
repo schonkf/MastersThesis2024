@@ -373,7 +373,6 @@ def all_participants(all_participants_data, esm_responses, user_info, processing
             
             # Iterate through each dataframe in the participant's data dictionary
             for dataframe_name, dataframe in participant_data.items():
-                Print(f'processing {participant_id}s {dataframe_name} data')
                 # Check if current dataframe needs specific windowed feature extraction
                 if dataframe_name in processing_functions:
                     # Get the processing function for the current dataframe
