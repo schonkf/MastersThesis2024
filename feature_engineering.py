@@ -142,7 +142,7 @@ def calculate_top_sleep_proxies(all_participants_data):
     
         sorted_proxies = sorted(sleep_proxies.items(), key=lambda x: x[0])
         proxies_df = pd.DataFrame(sorted_proxies, columns=['Date', 'SleepProxy'])
-        proxies_df['Date'] = proxies_df.to_datetime(proxies_df['Date'], unit='ms')
+        proxies_df['Date'] = pd.to_datetime(proxies_df['Date'], unit='ms')
         proxies_df.set_index('Date', inplace= True)
         participant_data['SleepProxies.csv'] = proxies_df
 
