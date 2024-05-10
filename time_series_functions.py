@@ -2,6 +2,9 @@
 # coding: utf-8
 
 # In[51]:
+import os
+import pandas as pd
+import numpy as np
 
 
 def resample_participant_data(all_participants_data, resample_dfs):
