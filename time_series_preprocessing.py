@@ -1,14 +1,16 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+
+
+# In[1]:
+
 import os
 import pandas as pd
 import numpy as np
 from datetime import timedelta
 import pygeohash as geo
 import scipy.spatial.distance as dist
-
-# In[1]:
 
 
 def acceleration_preprocess(all_participants_data):
