@@ -5,6 +5,7 @@
 import os
 import pandas as pd
 import numpy as np
+import cupy as cp
 
 
 def resample_participant_data(all_participants_data, resample_dfs):
@@ -161,6 +162,7 @@ def merge_dataframes_for_all_participants(all_participants_data):
 #MessageEvent.csv
 def extract_message_time_series(df, windows, timestamp):
     windowed_messageevent = {}
+
     if df.empty:
         for i in range(49):  # Assuming 49 timesteps
             windowed_messageevent[i] = [0, 0, 0, 0, 0]
@@ -178,39 +180,38 @@ def extract_message_time_series(df, windows, timestamp):
         window_start = current_time - pd.Timedelta(minutes=10)
         windowed_data = before_esm[(before_esm.index >= window_start) & (before_esm.index < current_time)]
 
-        unique_numbers_outgoing = []
-        unique_numbers_incoming = []
-        messages_outgoing = 0
-        messages_incoming = 0 
-        unique_messegers_outgoing = 0
-        unique_messegers_incoming = 0 
-        total_messages = 0 
-        for message_time, message_type, number, in windowed_data[['messageBox', 'number']].itertuples(index=True):
-            total_messages += 1
-            if message_type == 'SENT':
-                messages_outgoing += 1
-                if number not in unique_numbers_outgoing:
-                    unique_messegers_outgoing += 1
-                    unique_numbers_outgoing.append(number)
-            elif message_type == 'INBOX':
-                messages_incoming += 1
-                if number not in unique_numbers_incoming:
-                    unique_messegers_incoming += 1
-                    unique_numbers_incoming.append(number)
-        
-        windowed_messageevent[sequence_number] = [messages_outgoing, messages_incoming, unique_messegers_outgoing, unique_messegers_incoming, total_messages]
-        
+        # Convert DataFrame columns to CuPy arrays
+        messageBox = cp.asarray(windowed_data['messageBox'].values)
+        number = cp.asarray(windowed_data['number'].values)
+
+        # Vectorized operations on CuPy arrays
+        messages_outgoing = cp.count_nonzero(messageBox == 'SENT')
+        messages_incoming = cp.count_nonzero(messageBox == 'INBOX')
+        unique_numbers_outgoing = cp.unique(number[messageBox == 'SENT'])
+        unique_numbers_incoming = cp.unique(number[messageBox == 'INBOX'])
+
+        # Calculate unique messengers
+        unique_messegers_outgoing = cp.count_nonzero(unique_numbers_outgoing)
+        unique_messegers_incoming = cp.count_nonzero(unique_numbers_incoming)
+
+        # Total messages
+        total_messages = len(windowed_data)
+
+        windowed_messageevent[sequence_number] = [messages_outgoing, messages_incoming,
+                                                  unique_messegers_outgoing, unique_messegers_incoming,
+                                                  total_messages]
+
         current_time -= pd.Timedelta(minutes=10)  # Decrement current_time
         sequence_number += 1
 
     return windowed_messageevent
-
 
 # In[104]:
 
 
 def extract_deviceevent_time_series(df, windows, timestamp):
     windowed_deviceevent = {}
+
     if df.empty:
         for i in range(49):  # Assuming 49 timesteps
             windowed_deviceevent[i] = [0, 0]
@@ -232,22 +233,30 @@ def extract_deviceevent_time_series(df, windows, timestamp):
         times_unlocked = 0
         time_spent_on_phone = 0
         unlock_time = None  # Variable to store the timestamp of the last unlock event
-        for event_time, event_type in windowed_data[['type']].itertuples(index=True):
-            if event_type == 'UNLOCK':
+
+        # Convert DataFrame columns to CuPy arrays
+        event_time = cp.asarray(windowed_data.index.values)
+        event_type = cp.asarray(windowed_data['type'].values)
+
+        # Iterate through the data using CuPy arrays for GPU acceleration
+        for i in range(len(windowed_data)):
+            if event_type[i] == 'UNLOCK':
                 times_unlocked += 1
-                unlock_time = event_time  # Update the unlock time
-            elif event_type == 'SCREEN_OFF' and unlock_time is not None:
+                unlock_time = event_time[i]  # Update the unlock time
+            elif event_type[i] == 'SCREEN_OFF' and unlock_time is not None:
                 # Calculate the time spent on phone by subtracting unlock time from screen off time
-                time_spent_on_phone += (event_time - unlock_time).total_seconds()
+                time_spent_on_phone += (event_time[i] - unlock_time).total_seconds()
                 unlock_time = None  # Reset the unlock time
+
         proportion_time_spent_on_phone = time_spent_on_phone / window_size
         # Store the calculated values in the windowed_deviceevent dictionary
         windowed_deviceevent[current_time] = [times_unlocked, proportion_time_spent_on_phone]
-        
+
         current_time -= pd.Timedelta(minutes=10)  # Decrement current_time
         sequence_number += 1
 
     return windowed_deviceevent
+
 
 
 # In[105]:
@@ -259,9 +268,9 @@ def entropy(labels):
     if n_labels <= 1:
         return 0
     
-    _, counts = np.unique(labels, return_counts=True)
+    _, counts = cp.unique(labels, return_counts=True)
     probs = counts / n_labels
-    entropy = -np.sum(probs * np.log2(probs))
+    entropy = -cp.sum(probs * cp.log2(probs))
     
     return entropy
 
@@ -285,41 +294,43 @@ def extract_appusage_time_series(df, windows, timestamp):
         windowed_data = before_esm[(before_esm.index >= window_start) & (before_esm.index <= current_time)]
         
         if len(windowed_data) == 0:
-            windowed_appevent[sequence_number] = [np.nan] * 4
+            windowed_appevent[sequence_number] = [cp.nan] * 4
         else:
+            # Convert DataFrame columns to CuPy arrays
+            category = cp.asarray(windowed_data['category'].values)
+            app_type = cp.asarray(windowed_data['type'].values)
+            
             # Find the top 5 categories
-            top_categories = windowed_data['category'].value_counts().head(5).index
-            most_common_category = windowed_data['category'].mode().iloc[0]
+            top_categories, top_counts = cp.unique(category, return_counts=True)
+            top_category_indices = cp.argsort(-top_counts)[:5]
+            top_categories = top_categories[top_category_indices]
             
             # Calculate the time spent on each app category
-            app_category_time_spent = {}
-            app_category_count = {}
-            for category in top_categories:
-                category_data = windowed_data[windowed_data['category'] == category]
-                move_to_foreground_indices = category_data[category_data['type'] == 'MOVE_TO_FOREGROUND'].index
-                move_to_background_indices = category_data[category_data['type'] == 'MOVE_TO_BACKGROUND'].index
-
-                category_time_spent = 0
+            app_category_time_spent = cp.zeros(len(top_categories))
+            app_category_count = cp.zeros(len(top_categories), dtype=int)
+            for i, cat in enumerate(top_categories):
+                category_data = windowed_data[category == cat]
+                move_to_foreground_indices = category_data[app_type == 'MOVE_TO_FOREGROUND'].index.values
+                move_to_background_indices = category_data[app_type == 'MOVE_TO_BACKGROUND'].index.values
+                
                 for foreground_index in move_to_foreground_indices:
-                    next_background_index = min(move_to_background_indices[move_to_background_indices > foreground_index], default=None)
-                    if next_background_index is not None:
-                        category_time_spent += (next_background_index - foreground_index).total_seconds()
-
-                app_category_time_spent[category] = category_time_spent
-                app_category_count[category] = len(category_data)
-
+                    next_background_index = move_to_background_indices[move_to_background_indices > foreground_index]
+                    if len(next_background_index) > 0:
+                        next_background_index = next_background_index[0]
+                        app_category_time_spent[i] += (next_background_index - foreground_index).total_seconds()
+                
+                app_category_count[i] = len(category_data)
+            
             # Calculate the entropy of the app category distribution
-            app_category_entropy = entropy(windowed_data['category'])
+            app_category_entropy = entropy(category)
         
             # Store the calculated values in the windowed_appevent dictionary
-            sequence_data = []
-            for category, time_spent in app_category_time_spent.items():
-                sequence_data.extend([time_spent / 60, app_category_count[category]])
+            sequence_data = cp.hstack([app_category_time_spent / 60, app_category_count])
             
             # Add entropy and most common category to the sequence data
-            sequence_data.extend([app_category_entropy, most_common_category])
+            sequence_data = cp.hstack([sequence_data, [app_category_entropy, cp.argmax(top_counts)]])
             
-            windowed_appevent[sequence_number] = sequence_data
+            windowed_appevent[sequence_number] = sequence_data.get()
         
         current_time -= pd.Timedelta(minutes=10)  # Decrement current_time
         sequence_number += 1
@@ -343,21 +354,29 @@ def extract_call_timeseries(df, windows, timestamp):
     # Process the DataFrame if it's not empty
     before_esm = df[df.index <= timestamp]
     timestamp = pd.Timestamp(timestamp)
-    start_time = timestamp - pd.Timedelta(hours=8)
     end_time = timestamp
     max_timestamp = max(before_esm.index.min(), timestamp - pd.Timedelta(hours=8))
 
     sequence_number = 0
     current_time = end_time  # Start from the end_time
     while current_time >= max_timestamp:  # Iterate backwards
+        window_size = windows['10min']  # Retrieve window size from the windows dictionary
         window_start = current_time - pd.Timedelta(minutes=10)
-        windowed_data = before_esm[(before_esm.index >= window_start) & (before_esm.index < current_time)]
+        windowed_data = before_esm[(before_esm.index >= window_start) & (before_esm.index <= current_time)]
 
         unique_callers_outgoing = []
         unique_callers_incoming = []
         time_spent_calling = 0
 
-        for call_time, number, call_type, duration in windowed_data[['number', 'type', 'duration']].itertuples(index=True):
+        # Convert DataFrame columns to CuPy arrays
+        numbers = cp.asarray(windowed_data['number'].values)
+        call_types = cp.asarray(windowed_data['type'].values)
+        durations = cp.asarray(windowed_data['duration'].values)
+
+        for i in range(len(numbers)):
+            number = numbers[i]
+            call_type = call_types[i]
+            duration = durations[i]
             time_spent_calling += duration / 60  # Accumulate duration in minutes
             if call_type == 'OUTGOING' and number not in unique_callers_outgoing:
                 unique_callers_outgoing.append(number)
@@ -379,21 +398,21 @@ def extract_call_timeseries(df, windows, timestamp):
 def calculate_entropy(cluster_counts):
     total_time = cluster_counts.sum()
     cluster_proportions = cluster_counts / total_time
-    entropy = -np.sum([p * np.log2(p) for p in cluster_proportions.values if p != 0])
+    entropy = -cp.sum([p * cp.log2(p) for p in cluster_proportions.values if p != 0])
     return entropy
 
 def calculate_normalised_entropy(cluster_counts):
     if len(cluster_counts) == 0:
-        return np.nan
+        return cp.nan
         
     total_time = cluster_counts.sum()
     cluster_proportions = cluster_counts / total_time
-    entropy = -np.sum([p * np.log2(p) for p in cluster_proportions.values if p != 0])
+    entropy = -cp.sum([p * cp.log2(p) for p in cluster_proportions.values if p != 0])
     
-    max_entropy = -np.log2(1 / len(cluster_counts))
+    max_entropy = -cp.log2(1 / len(cluster_counts))
     
-    if max_entropy == 0 or np.isnan(entropy):
-        return np.nan
+    if max_entropy == 0 or cp.isnan(entropy):
+        return cp.nan
     
     normalized_entropy = entropy / max_entropy
     
@@ -403,25 +422,25 @@ def extract_location_time_series(df, windows, timestamp):
     windowed_location = {}
     if df.empty:
         for i in range(49):  # Assuming 49 timesteps
-            windowed_location[i] = [np.nan, np.nan, np.nan]
+            windowed_location[i] = [cp.nan, cp.nan, cp.nan]
         return windowed_location
 
     before_esm = df[df.index <= timestamp]
     timestamp = pd.Timestamp(timestamp)
-    start_time = timestamp - pd.Timedelta(hours=8)
     end_time = timestamp
     max_timestamp = max(before_esm.index.min(), timestamp - pd.Timedelta(hours=8))
     
     sequence_number = 0
     current_time = end_time  # Start from the end_time
     while current_time >= max_timestamp:  # Iterate backwards
+        window_size = windows['10min']  # Retrieve window size from the windows dictionary
         window_start = current_time - pd.Timedelta(minutes=10)
-        windowed_data = before_esm[(before_esm.index >= window_start) & (before_esm.index < current_time)]
+        windowed_data = before_esm[(before_esm.index >= window_start) & (before_esm.index <= current_time)]
         
         if len(windowed_data) == 0:
-            most_common_cluster = np.nan
-            window_entropy = np.nan
-            window_normalised_entropy = np.nan
+            most_common_cluster = cp.nan
+            window_entropy = cp.nan
+            window_normalised_entropy = cp.nan
         else:
             cluster_counts = windowed_data['cluster'].value_counts()
             most_common_cluster = windowed_data['cluster'].mode().iloc[0]
@@ -442,7 +461,7 @@ def extract_location_time_series(df, windows, timestamp):
 def generic_entropy(data):
     value_counts = data.value_counts()
     probabilities = value_counts / len(data)
-    entropy = -np.sum(probabilities * np.log2(probabilities))
+    entropy = -cp.sum(probabilities * cp.log2(probabilities))
     return entropy
 
 def extract_generic_time_series(df, windows, timestamp):
@@ -455,15 +474,15 @@ def extract_generic_time_series(df, windows, timestamp):
 
     before_esm = df[df.index <= timestamp]
     timestamp = pd.Timestamp(timestamp)
-    start_time = timestamp - pd.Timedelta(hours=8)
     end_time = timestamp
     max_timestamp = max(before_esm.index.min(), timestamp - pd.Timedelta(hours=8))
     
     sequence_number = 0
     current_time = end_time  # Start from the end_time
     while current_time >= max_timestamp:  # Iterate backwards
+        window_size = windows['10min']  # Retrieve window size from the windows dictionary
         window_start = current_time - pd.Timedelta(minutes=10)
-        windowed_data = before_esm[(before_esm.index >= window_start) & (before_esm.index < current_time)]
+        windowed_data = before_esm[(before_esm.index >= window_start) & (before_esm.index <= current_time)]
         
         windowed_features = []  # Initialize list to store statistics for each column
         numeric_cols = windowed_data.select_dtypes(include=np.number).columns
@@ -562,7 +581,7 @@ def sequence_creation(all_participants_data, esm_responses, user_info):
     # Define a list of tuples with external function names and corresponding DataFrame names
     external_functions = [
         (extract_generic_time_series, 'Calorie.csv'),
-        (extract_generic_time_series, 'SkinTemperature.csv'),  # Example: Add more functions and DataFrame names here
+        (extract_generic_time_series, 'SkinTemperature.csv'),
         (extract_generic_time_series, 'AmbientLight.csv'),
         (extract_generic_time_series, 'RRI.csv'),
         (extract_generic_time_series, 'StepCount.csv'),
@@ -622,7 +641,7 @@ def sequence_creation(all_participants_data, esm_responses, user_info):
 
                     # Append the timestep features to the list
                     for i in range(49):
-                        timestep_features[i].extend(timestep_features_func.get(i, [0, 0, 0]))
+                        timestep_features[i].extend(timestep_features_func.get(i, [np.nan] * len(timestep_features[i])))  # Use np.nan for missing values
 
             # Add static features to each timestep
             static_features = [day_of_week, age, gender, openness, conscientiousness, neuroticism, agreeableness, pss10, phq9, ghq12]
