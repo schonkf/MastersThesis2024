@@ -3,6 +3,10 @@
 
 # In[51]:
 
+import os
+import pandas as pd
+import numpy as np
+from datetime import timedelta
 
 def resample_participant_data(all_participants_data, resample_dfs):
     for participant, participant_data in all_participants_data.items():
