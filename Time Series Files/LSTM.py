@@ -5,18 +5,15 @@
 
 
 import numpy as np
-import os
 import pandas as pd
-import pickle
-from sklearn.preprocessing import LabelEncoder 
+import tensorflow as tf
+from sklearn.preprocessing import LabelEncoder, MinMaxScaler
 from collections import defaultdict
 from keras.models import Model, Sequential, load_model
 from keras.layers import Input, Embedding, LSTM, concatenate, Dense, Embedding, TimeDistributed, Flatten, Masking, Dropout, GRU, Concatenate, RNN
 from keras.preprocessing.sequence import pad_sequences
-from sklearn.preprocessing import MinMaxScaler
 from keras.optimizers import Adam, RMSprop
 from sklearn.metrics import accuracy_score, roc_auc_score, classification_report, f1_score
-import tensorflow as tf
 from tensorflow.keras.callbacks import EarlyStopping
 import matplotlib.pyplot as plt
 
